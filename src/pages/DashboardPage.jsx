@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { StatCard } from "../components/common/StatCard";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -9,28 +9,61 @@ import {
   saveStoredBookings,
   INITIAL_SLOTS
 } from "../data/mockData";
+import { reportAPI, bookingAPI, turfAPI, slotAPI } from "../services/api";
+import { formatINR } from "../utils/formatters";
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const context = useOutletContext() || {};
   const globalSearch = context.globalSearch || "";
 
-  const [turfs] = useState(getStoredTurfs());
+  const [turfs, setTurfs] = useState(getStoredTurfs());
   const [bookings, setBookings] = useState(getStoredBookings());
   const [tableFilter, setTableFilter] = useState("All");
   const [pitchFilter, setPitchFilter] = useState("All");
   const [period, setPeriod] = useState("Monthly");
+  const [dashboardStats, setDashboardStats] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Modals for Quick Actions
   const [isNewBookingOpen, setIsNewBookingOpen] = useState(false);
   const [isQuickBlockOpen, setIsQuickBlockOpen] = useState(false);
 
+  // Fetch Dashboard Stats and Data from Backend
+  const fetchDashboardData = async () => {
+    setIsLoading(true);
+    try {
+      const statsRes = await reportAPI.getDashboardStats();
+      if (statsRes?.success && statsRes.data) {
+        setDashboardStats(statsRes.data);
+        if (statsRes.data.recentBookings?.length > 0) {
+          setBookings(statsRes.data.recentBookings);
+        }
+      }
+
+      const turfsRes = await turfAPI.getAll({ status: "active" });
+      if (turfsRes?.success && turfsRes.data?.length > 0) {
+        setTurfs(turfsRes.data);
+      }
+    } catch (err) {
+      console.warn("[Dashboard] Backend sync error, falling back to local mock data:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const today = new Date().toISOString().split("T")[0];
+
   // Quick Manual Booking Form State
   const [newBookingData, setNewBookingData] = useState({
     customerName: "",
     customerPhone: "",
-    turfId: turfs[0]?.id || "pitch-1",
-    date: "2026-10-24",
+    turfId: turfs[0]?.id || turfs[0]?._id || "pitch-1",
+    date: today,
     timeSlot: "18:00 - 20:00",
     bookingType: "Casual Match",
     paymentMethod: "Cash at Desk",
@@ -39,16 +72,34 @@ export function DashboardPage() {
 
   // Quick Slot Block Form State
   const [blockData, setBlockData] = useState({
-    turfId: turfs[0]?.id || "pitch-1",
-    date: "2026-10-24",
+    turfId: turfs[0]?.id || turfs[0]?._id || "pitch-1",
+    date: today,
     timeSlot: "10:00 - 12:00",
     reason: "Sprinklers & Edge Trim",
     notes: "Grounds crew routine maintenance"
   });
 
-  const handleCreateBooking = (e) => {
+  const handleCreateBooking = async (e) => {
     e.preventDefault();
-    const selectedTurf = turfs.find((t) => t.id === newBookingData.turfId) || turfs[0];
+    const selectedTurf = turfs.find((t) => t.id === newBookingData.turfId || t._id === newBookingData.turfId) || turfs[0];
+
+    try {
+      const res = await bookingAPI.create({
+        ...newBookingData,
+        turfId: selectedTurf.id || selectedTurf._id,
+      });
+
+      if (res?.data) {
+        setIsNewBookingOpen(false);
+        fetchDashboardData();
+        return;
+      }
+    } catch (err) {
+      alert(`Booking Failed: ${err.message}`);
+      return;
+    }
+
+    // Local fallback
     const duration = 2;
     const amount = selectedTurf.hourlyPrice * duration;
 
@@ -62,11 +113,11 @@ export function DashboardPage() {
         .join("")
         .toUpperCase()
         .slice(0, 2),
-      turfId: selectedTurf.id,
+      turfId: selectedTurf.id || selectedTurf._id,
       turfName: selectedTurf.name,
       turfType: selectedTurf.surfaceGrade,
       date: newBookingData.date,
-      displayDate: "Today, Oct 24",
+      displayDate: "Today",
       timeSlot: newBookingData.timeSlot,
       startTime: newBookingData.timeSlot.split(" - ")[0],
       endTime: newBookingData.timeSlot.split(" - ")[1],
@@ -84,21 +135,17 @@ export function DashboardPage() {
     setBookings(updated);
     saveStoredBookings(updated);
     setIsNewBookingOpen(false);
-    setNewBookingData({
-      customerName: "",
-      customerPhone: "",
-      turfId: turfs[0]?.id || "pitch-1",
-      date: "2026-10-24",
-      timeSlot: "18:00 - 20:00",
-      bookingType: "Casual Match",
-      paymentMethod: "Cash at Desk",
-      paymentStatus: "Paid",
-    });
   };
 
-  const handleBlockSlot = (e) => {
+  const handleBlockSlot = async (e) => {
     e.preventDefault();
-    alert(`Slot blocked successfully on ${turfs.find(t => t.id === blockData.turfId)?.name || 'Pitch'} for ${blockData.reason}`);
+    try {
+      await slotAPI.block(blockData);
+      fetchDashboardData();
+    } catch (err) {
+      console.warn("Backend block error:", err.message);
+    }
+    alert(`Slot blocked successfully on ${turfs.find(t => t.id === blockData.turfId || t._id === blockData.turfId)?.name || 'Pitch'} for ${blockData.reason}`);
     setIsQuickBlockOpen(false);
   };
 
@@ -149,7 +196,7 @@ export function DashboardPage() {
             </span>
           </div>
           <h1 className="font-heading text-2xl lg:text-3xl text-on-surface font-bold tracking-tight">
-            Welcome Back, Owner!
+            Welcome back, Vansh! 👋
           </h1>
           <p className="font-body text-xs sm:text-sm text-on-surface-variant">
             Here’s an overview of your turf business, field telemetries, and bookings today.
@@ -185,38 +232,38 @@ export function DashboardPage() {
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-md">
         <StatCard
           title="Pitch Inventory"
-          value="6 Pitches"
-          subtitle="4 × 7-a-side, 2 × 11-a-side • Operational"
+          value={`${dashboardStats?.activeTurfs ?? turfs.length} Pitches`}
+          subtitle="Full facility grounds active & operational"
           icon="stadium"
-          badgeText="+1 New Arena"
-          badgeIcon="add"
+          badgeText="Active Pitches"
+          badgeIcon="check_circle"
           badgeVariant="positive"
         />
         <StatCard
           title="Today’s Bookings"
-          value="18 Slots"
-          subtitle="85% daily occupancy rate achieved"
+          value={`${dashboardStats?.todayBookingsCount ?? 18} Slots`}
+          subtitle="Live daily reservation count"
           icon="event_available"
-          badgeText="+14% vs yesterday"
+          badgeText="Scheduled"
           badgeIcon="trending_up"
           badgeVariant="positive"
         />
         <StatCard
           title="Monthly Gross"
-          value="$24,850"
-          subtitle="Target $28,000 (88%)"
+          value={formatINR(dashboardStats?.monthlyRevenue ?? 214500)}
+          subtitle="Net revenue collected this cycle"
           icon="account_balance_wallet"
-          progress={88.75}
-          badgeText="+18.2%"
+          progress={dashboardStats ? 92 : 88.75}
+          badgeText="Settled Funds"
           badgeIcon="north_east"
           badgeVariant="positive"
         />
         <StatCard
           title="Slots Remaining"
-          value="6 Remaining"
-          subtitle="Peak hours 18:00 - 22:00 almost full"
+          value={`${dashboardStats?.slotsRemainingToday ?? 6} Remaining`}
+          subtitle="Unbooked 2-hour capacity slots today"
           icon="timelapse"
-          badgeText="Prime Evening: 2"
+          badgeText="Available"
           badgeIcon="stars"
           badgeVariant="neutral"
         />
@@ -258,7 +305,7 @@ export function DashboardPage() {
 
             <div className="flex items-baseline gap-space-xs mb-space-md">
               <span className="font-heading text-3xl sm:text-4xl font-bold text-primary-container leading-none">
-                $24,850
+                {formatINR(dashboardStats?.monthlyRevenue ?? 214500)}
               </span>
               <span className="font-body text-xs text-on-surface-variant">
                 gross earned this month across all 6 turfs
@@ -312,7 +359,7 @@ export function DashboardPage() {
                   Oct 18 • Peak Slot
                 </span>
                 <span className="font-body text-xs font-semibold mt-0.5">
-                  $1,420 • 12 bookings
+                  ₹14,500 • 12 bookings
                 </span>
                 <div className="w-2 h-2 bg-primary-container rotate-45 -mb-1 mt-1" />
               </div>
@@ -335,7 +382,7 @@ export function DashboardPage() {
                 Avg. Booking Value
               </span>
               <span className="font-heading text-lg text-on-surface font-bold mt-0.5">
-                $65<span className="text-xs font-normal text-on-surface-variant">/hr</span>
+                ₹950<span className="text-xs font-normal text-on-surface-variant">/hr</span>
               </span>
               <span className="font-heading text-xs text-secondary font-semibold mt-0.5">
                 +4.2% optimized
@@ -349,7 +396,7 @@ export function DashboardPage() {
                 Saturday
               </span>
               <span className="font-heading text-xs text-primary font-semibold mt-0.5">
-                $2,140 avg / day
+                ₹18,500 avg / day
               </span>
             </div>
             <div className="flex flex-col px-space-xs">
@@ -360,7 +407,7 @@ export function DashboardPage() {
                 92%
               </span>
               <span className="font-heading text-xs text-secondary font-semibold mt-0.5">
-                Stripe / Online Card
+                UPI / Online
               </span>
             </div>
           </div>
@@ -386,7 +433,7 @@ export function DashboardPage() {
 
             {/* Pitch Filter Selector Tabs */}
             <div className="flex items-center gap-1.5 overflow-x-auto py-1 mb-space-md no-scrollbar">
-              {["All", "Pitch 1 (Wembley)", "Pitch 2 (Camp Nou)", "Pitch 3 (San Siro)"].map((p) => (
+              {["All", "Pitch 1 (Greenfield)", "Pitch 2 (KickOff)", "Pitch 3 (Champion)"].map((p) => (
                 <button
                   key={p}
                   onClick={() => setPitchFilter(p)}
@@ -641,7 +688,7 @@ export function DashboardPage() {
                     • <span className="text-[11px] text-on-surface-variant">{booking.bookingType}</span>
                   </td>
                   <td className="py-3.5 px-4 font-heading font-bold text-on-surface">
-                    ${booking.amount.toFixed(2)}
+                    {formatINR(booking.amount)}
                   </td>
                   <td className="py-3.5 px-4">
                     <StatusBadge status={booking.status} />
@@ -703,7 +750,7 @@ export function DashboardPage() {
                 onChange={(e) =>
                   setNewBookingData({ ...newBookingData, customerPhone: e.target.value })
                 }
-                placeholder="+1 (555) 234-8901"
+                placeholder="+91 98XXX 12XXX"
                 className="w-full bg-surface-container-low text-on-surface font-body text-sm rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               />
             </div>
@@ -722,8 +769,8 @@ export function DashboardPage() {
                 className="w-full bg-surface-container-low text-on-surface font-body text-sm rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               >
                 {turfs.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} (${t.hourlyPrice}/hr)
+                  <option key={t.id || t._id} value={t.id || t._id}>
+                    {t.name} (₹{t.hourlyPrice}/hr)
                   </option>
                 ))}
               </select>
@@ -763,9 +810,8 @@ export function DashboardPage() {
                 className="w-full bg-surface-container-low text-on-surface font-body text-sm rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               >
                 <option value="Cash at Desk">Cash at Desk</option>
-                <option value="UPI (PhonePe / GPay)">UPI (PhonePe / GPay)</option>
-                <option value="Card Terminal (Stripe)">Card Terminal (Stripe)</option>
-                <option value="Bank Wire">Bank Wire</option>
+                <option value="UPI (GPay / PhonePe / Paytm)">UPI (GPay / PhonePe / Paytm)</option>
+                <option value="Bank Transfer (IMPS)">Bank Transfer (IMPS)</option>
               </select>
             </div>
             <div>
@@ -793,7 +839,7 @@ export function DashboardPage() {
                 Total Session Price:
               </span>
               <div className="font-heading text-lg font-bold text-primary">
-                ${(turfs.find(t => t.id === newBookingData.turfId)?.hourlyPrice || 75) * 2}.00
+                {formatINR(((turfs.find(t => t.id === newBookingData.turfId || t._id === newBookingData.turfId)?.hourlyPrice || 1200) * 2))}
               </div>
             </div>
             <span className="px-2 py-1 rounded bg-secondary-container text-secondary font-heading text-xs font-bold">

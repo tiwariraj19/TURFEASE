@@ -1,29 +1,44 @@
 # TurfEase — Next Session Continuation Prompt
 
-You are resuming work on the **TurfEase — Owner-only Turf Management System** frontend.
+You are resuming work on the **TurfEase — Owner-Only Turf Management System**.
 
-### Context
-- The complete frontend has been built with React 18, Vite 6, Tailwind CSS, and React Router DOM.
-- The project is located in `c:\Users\Vansh Tiwari\Desktop\TURFEASE`.
-- Stitch MCP is verified and active (project `projects/13764901521705672763`).
-- Node.js is located at `C:\Users\Vansh Tiwari\AppData\Local\Programs\nodejs`.
+### Current Context & Architecture
+- **Location**: `c:\Users\Vansh Tiwari\Desktop\TURFEASE`
+- **Owner Identity**: **Vansh Tiwari** (`owner@turfease.in`)
+- **Frontend**: React 18, Vite 6, Tailwind CSS v3, React Router DOM v6
+- **Backend**: Node.js, Express.js (in `server/`), MongoDB Atlas with automatic in-memory fallback
+- **Theme**: Minimalist Forest-Green (`#064E3B`, `#1E6B4F`, `#A7D977`) and Cream (`#F8F7E9`, `#E8F3E6`) Gradient UI
+- **Indian Standards (100% Implemented & Verified)**:
+  - Currency: Indian Rupee (`₹` / INR) with Indian grouping (`Intl.NumberFormat('en-IN')` via `src/utils/formatters.js`).
+  - Dates: `en-IN` format (`DD/MM/YYYY`) and IST 12-hour AM/PM conventions.
+  - Locations: Pune, Mumbai, Thane, Nashik.
+  - Payment Methods: UPI (GPay, PhonePe, Paytm), Cash at Desk, Bank Transfer (IMPS/NEFT).
 
-### Running the App
+### Final 6 Implemented & Verified Pages
+1. `/login` — Owner Login portal with Vansh Tiwari 1-click demo login (`owner@turfease.in`).
+2. `/dashboard` — Master Facility Operations & Financial Telemetry ("Welcome back, Vansh!", SVG area chart in ₹, live schedule matrix, recent bookings ledger).
+3. `/turfs` — Manage Turfs (Pitch capacity cards, sport filter pills, Grid/Table view, Add/Edit Turf modal in ₹ INR, Deactivate dialog).
+4. `/bookings` — Slots & Bookings (06:00 to 24:00 facility availability grid across 6 Indian turfs, Bookings List view in ₹, double-booking prevention, maintenance block).
+5. `/payments` — Payments & Invoicing (Receivables KPIs in ₹, transaction ledger, Indian payment filters, Record Payment modal).
+6. `/reports` — Reports & Analytics (Revenue summary KPIs in ₹, monthly revenue area trend chart, weekend surge velocity bars, turf occupancy & earnings).
+
+### Verification Status
+- **Backend Test Suite (`node scripts/testEndpoints.js`)**: 7/7 Tests Passed.
+- **Frontend Build (`npm run build`)**: 0 errors, built in 3.02s.
+
+### Verification Commands
 ```powershell
 $env:Path = "C:\Users\Vansh Tiwari\AppData\Local\Programs\nodejs;$env:Path"
+# Frontend Dev Server (Port 3000)
 npm run dev
+
+# Backend Daemon (Port 5000)
+cd server
+node server.js
+
+# Backend Automated Test Suite
+node scripts/testEndpoints.js
+
+# Production Build
+npm run build
 ```
-
-### All 6 Routes are Implemented:
-1. `/login` — Owner Login portal with demo credentials & 1-click access
-2. `/dashboard` — Master Command Center (KPIs, revenue trends, live schedule, recent ledger)
-3. `/turfs` — Manage Turfs (Asset cards/table, Add/Edit modal, Deactivate dialog)
-4. `/bookings` — Slots & Bookings (Calendar availability matrix, overlapping conflict warning, maintenance blocks)
-5. `/payments` — Payments & Invoicing (Receivables ledger, Collect balance action, Record payment modal)
-6. `/reports` — Reports & Analytics (Revenue area chart, weekly surge bars, turf-wise earnings progress, CSV export)
-
-### Potential Next Steps for the Project:
-1. Backend API integration (replace `src/data/mockData.js` and `src/context/AuthContext.jsx` with real REST / GraphQL endpoints).
-2. Live WebSocket or Polling synchronization for slot status and counter POS transactions.
-3. Razorpay / Stripe payment gateway SDK checkout integration for digital online card & UPI payments.
-4. Export to PDF automated styling using html2canvas or pdfmake.

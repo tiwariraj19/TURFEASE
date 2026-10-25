@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useOutletContext } from "react-router-dom";
 import { StatCard } from "../components/common/StatCard";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -8,13 +8,16 @@ import {
   saveStoredPayments,
   getStoredBookings
 } from "../data/mockData";
+import { paymentAPI, bookingAPI } from "../services/api";
+import { formatINR } from "../utils/formatters";
 
 export function PaymentsPage() {
   const context = useOutletContext() || {};
   const globalSearch = context.globalSearch || "";
 
   const [payments, setPayments] = useState(getStoredPayments());
-  const [bookings] = useState(getStoredBookings());
+  const [bookings, setBookings] = useState(getStoredBookings());
+  const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
@@ -30,11 +33,49 @@ export function PaymentsPage() {
     refNote: "",
   });
 
-  // KPI Calculations
-  const totalCollected = payments.reduce((acc, curr) => acc + curr.receivedAmount, 0);
-  const totalPending = payments.reduce((acc, curr) => acc + curr.dueBalance, 0);
-  const settledToday = 3140;
-  const refunds = 420;
+  const fetchPaymentsData = async () => {
+    setIsLoading(true);
+    try {
+      const res = await paymentAPI.getAll({
+        status: statusFilter,
+        method: methodFilter,
+        search: searchQuery || globalSearch,
+      });
+      if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+        setPayments(res.data);
+        saveStoredPayments(res.data);
+      }
+
+      const bookingRes = await bookingAPI.getAll();
+      if (bookingRes?.success && Array.isArray(bookingRes.data) && bookingRes.data.length > 0) {
+        setBookings(bookingRes.data);
+      }
+    } catch (err) {
+      console.warn("[Payments] API sync error, keeping local mock state:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPaymentsData();
+  }, [statusFilter, methodFilter]);
+
+  // KPI Calculations from active data
+  const totalCollected = payments.reduce(
+    (acc, curr) => (curr.status !== "Refunded" ? acc + (curr.receivedAmount || 0) : acc),
+    0
+  );
+  const totalPending = payments.reduce(
+    (acc, curr) => (curr.status !== "Refunded" ? acc + (curr.dueBalance || 0) : acc),
+    0
+  );
+  const settledToday = payments
+    .filter((p) => p.status === "Paid")
+    .reduce((acc, curr) => acc + (curr.receivedAmount || 0), 0);
+  const refunds = payments
+    .filter((p) => p.status === "Refunded")
+    .reduce((acc, curr) => acc + (curr.totalAmount || curr.receivedAmount || 0), 0);
 
   const handleOpenRecordPayment = (txn = null) => {
     if (txn) {
@@ -48,7 +89,7 @@ export function PaymentsPage() {
     } else {
       setSelectedTxn(null);
       setRecordForm({
-        bookingId: bookings[0]?.id || "TE-8841",
+        bookingId: bookings[0]?.bookingId || bookings[0]?.id || "TE-8841",
         amountToCollect: 110,
         paymentMethod: "UPI (PhonePe)",
         refNote: "",
@@ -57,16 +98,35 @@ export function PaymentsPage() {
     setIsRecordModalOpen(true);
   };
 
-  const handleSavePayment = (e) => {
+  const handleSavePayment = async (e) => {
     e.preventDefault();
     const collectAmt = Number(recordForm.amountToCollect);
 
+    try {
+      const res = await paymentAPI.record({
+        bookingId: recordForm.bookingId,
+        paymentId: selectedTxn?.paymentId || selectedTxn?.id,
+        amountToCollect: collectAmt,
+        paymentMethod: recordForm.paymentMethod,
+        refNote: recordForm.refNote,
+      });
+
+      if (res?.data) {
+        setIsRecordModalOpen(false);
+        fetchPaymentsData();
+        return;
+      }
+    } catch (err) {
+      alert(`Payment Record Error: ${err.message}`);
+      return;
+    }
+
+    // Local fallback
     if (selectedTxn) {
-      // Reconcile existing transaction
       const updated = payments.map((p) => {
-        if (p.id === selectedTxn.id) {
-          const newReceived = p.receivedAmount + collectAmt;
-          const newDue = Math.max(0, p.totalAmount - newReceived);
+        if (p.id === selectedTxn.id || p.paymentId === selectedTxn.paymentId) {
+          const newReceived = (p.receivedAmount || 0) + collectAmt;
+          const newDue = Math.max(0, (p.totalAmount || 0) - newReceived);
           return {
             ...p,
             receivedAmount: newReceived,
@@ -80,16 +140,15 @@ export function PaymentsPage() {
       setPayments(updated);
       saveStoredPayments(updated);
     } else {
-      // Create new transaction record
-      const matchedBooking = bookings.find((b) => b.id === recordForm.bookingId) || bookings[0];
+      const matchedBooking = bookings.find((b) => (b.id || b.bookingId) === recordForm.bookingId) || bookings[0];
       const newTxn = {
         id: `PAY-${Math.floor(2100 + Math.random() * 900)}`,
-        bookingId: matchedBooking.id,
+        bookingId: matchedBooking.bookingId || matchedBooking.id,
         customerName: matchedBooking.customerName,
         customerPhone: matchedBooking.customerPhone,
         customerInitials: matchedBooking.customerInitials || "SK",
         turfName: matchedBooking.turfName,
-        slotTime: `${matchedBooking.displayDate}, ${matchedBooking.timeSlot}`,
+        slotTime: `${matchedBooking.displayDate || matchedBooking.date}, ${matchedBooking.timeSlot}`,
         totalAmount: matchedBooking.amount,
         receivedAmount: collectAmt,
         dueBalance: Math.max(0, matchedBooking.amount - collectAmt),
@@ -206,7 +265,7 @@ export function PaymentsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-space-md">
         <StatCard
           title="Total Collected (MTD)"
-          value={`$${totalCollected.toLocaleString()}`}
+          value={formatINR(totalCollected)}
           subtitle="+16.8% vs last month • 94.2% rate"
           icon="payments"
           badgeText="Yield 94%"
@@ -214,7 +273,7 @@ export function PaymentsPage() {
         />
         <StatCard
           title="Pending Receivables"
-          value={`$${totalPending.toLocaleString()}`}
+          value={formatINR(totalPending)}
           subtitle="Uncollected counter balances"
           icon="pending_actions"
           badgeText="14 Pending"
@@ -222,7 +281,7 @@ export function PaymentsPage() {
         />
         <StatCard
           title="Settled Today"
-          value={`$${settledToday.toLocaleString()}`}
+          value={formatINR(settledToday)}
           subtitle="11 txns • Peak 18:00 - 22:00"
           icon="bolt"
           badgeText="+8.4%"
@@ -230,7 +289,7 @@ export function PaymentsPage() {
         />
         <StatCard
           title="Refunds &amp; Adjustments"
-          value={`$${refunds.toLocaleString()}`}
+          value={formatINR(refunds)}
           subtitle="2 rainout waivers • 1 credit"
           icon="history"
           badgeText="Audited"
@@ -285,10 +344,9 @@ export function PaymentsPage() {
             className="bg-surface-container-low rounded-xl px-3 py-2 text-on-surface font-heading text-xs font-semibold outline-none cursor-pointer hover:bg-surface-container transition-colors"
           >
             <option value="all">All Methods</option>
-            <option value="upi">UPI (PhonePe/GPay)</option>
+            <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
             <option value="cash">Cash at Counter</option>
-            <option value="card">Stripe / Card</option>
-            <option value="wire">Bank Wire</option>
+            <option value="bank">Bank Transfer (IMPS)</option>
           </select>
 
           {/* Toggle: Unsettled First */}
@@ -401,18 +459,18 @@ export function PaymentsPage() {
                     </div>
                   </td>
                   <td className="py-space-md px-space-md text-right font-heading font-semibold">
-                    ${p.totalAmount.toFixed(2)}
+                    {formatINR(p.totalAmount)}
                   </td>
                   <td className="py-space-md px-space-md text-right font-heading text-primary font-bold">
-                    ${p.receivedAmount.toFixed(2)}
+                    {formatINR(p.receivedAmount)}
                   </td>
                   <td className="py-space-md px-space-md text-right">
                     {p.dueBalance > 0 ? (
                       <span className="inline-flex px-2 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-heading text-xs font-bold">
-                        ${p.dueBalance.toFixed(2)} Due
+                        {formatINR(p.dueBalance)} Due
                       </span>
                     ) : (
-                      <span className="text-on-surface-variant text-xs">$0.00</span>
+                      <span className="text-on-surface-variant text-xs">{formatINR(0)}</span>
                     )}
                   </td>
                   <td className="py-space-md px-space-md">
@@ -422,9 +480,7 @@ export function PaymentsPage() {
                           ? "qr_code_scanner"
                           : p.paymentMethod.toLowerCase().includes("cash")
                           ? "point_of_sale"
-                          : p.paymentMethod.toLowerCase().includes("wire")
-                          ? "account_balance"
-                          : "credit_card"}
+                          : "account_balance"}
                       </span>
                       <span>{p.paymentMethod}</span>
                     </div>
@@ -440,7 +496,7 @@ export function PaymentsPage() {
                           className="px-3 py-1 rounded-full bg-primary text-on-primary font-heading text-xs font-bold shadow-xs hover:bg-secondary transition-all"
                           type="button"
                         >
-                          Collect ${p.dueBalance.toFixed(0)}
+                          Collect {formatINR(p.dueBalance)}
                         </button>
                       )}
                       <button
@@ -488,7 +544,7 @@ export function PaymentsPage() {
               >
                 {bookings.map((b) => (
                   <option key={b.id} value={b.id}>
-                    #{b.id} — {b.customerName} ({b.turfName} • ${b.amount})
+                    #{b.id} — {b.customerName} ({b.turfName} • {formatINR(b.amount)})
                   </option>
                 ))}
               </select>
@@ -506,7 +562,7 @@ export function PaymentsPage() {
               <div className="text-right">
                 <span className="font-heading text-xs text-on-surface-variant uppercase">Due Balance</span>
                 <div className="font-heading text-lg font-bold text-error">
-                  ${selectedTxn.dueBalance.toFixed(2)}
+                  {formatINR(selectedTxn.dueBalance)}
                 </div>
               </div>
             </div>
@@ -515,12 +571,12 @@ export function PaymentsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block font-heading text-xs uppercase font-semibold text-on-surface mb-1">
-                Amount to Collect ($)
+                Amount to Collect (₹ INR)
               </label>
               <input
                 type="number"
-                min="1"
-                step="5"
+                min="50"
+                step="50"
                 required
                 value={recordForm.amountToCollect}
                 onChange={(e) =>
@@ -541,9 +597,8 @@ export function PaymentsPage() {
                 className="w-full px-4 py-2.5 bg-surface-container-low rounded-xl text-on-surface font-body text-sm outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               >
                 <option value="Cash at Desk">Cash at Desk (POS)</option>
-                <option value="UPI (PhonePe)">UPI (PhonePe / GPay)</option>
-                <option value="Card Terminal (Stripe)">Card Terminal (Stripe)</option>
-                <option value="Bank Wire">Direct Bank Wire</option>
+                <option value="UPI (GPay / PhonePe / Paytm)">UPI (GPay / PhonePe / Paytm)</option>
+                <option value="Bank Transfer (IMPS)">Bank Transfer (IMPS)</option>
               </select>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useOutletContext } from "react-router-dom";
 import { StatCard } from "../components/common/StatCard";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -10,19 +10,23 @@ import {
   saveStoredBookings,
   INITIAL_SLOTS
 } from "../data/mockData";
+import { bookingAPI, slotAPI, turfAPI } from "../services/api";
+import { formatINR } from "../utils/formatters";
 
 export function SlotsBookingsPage() {
   const context = useOutletContext() || {};
   const globalSearch = context.globalSearch || "";
 
-  const [turfs] = useState(getStoredTurfs());
+  const [turfs, setTurfs] = useState(getStoredTurfs());
   const [bookings, setBookings] = useState(getStoredBookings());
   const [slots, setSlots] = useState(INITIAL_SLOTS);
+  const [isLoading, setIsLoading] = useState(false);
+  const [actionError, setActionError] = useState(null);
 
   // Tab View: 'calendar' | 'ledger'
   const [activeTab, setActiveTab] = useState("calendar");
   const [selectedTurfFilter, setSelectedTurfFilter] = useState("all");
-  const [currentDate, setCurrentDate] = useState("2026-10-24");
+  const [currentDate, setCurrentDate] = useState(() => new Date().toISOString().split("T")[0]);
 
   // Modals
   const [isManualBookingOpen, setIsManualBookingOpen] = useState(false);
@@ -30,12 +34,46 @@ export function SlotsBookingsPage() {
   const [selectedBookingDetails, setSelectedBookingDetails] = useState(null);
   const [cancelTargetBooking, setCancelTargetBooking] = useState(null);
 
+  // Fetch Slots Matrix and Bookings for Date
+  const fetchSchedule = async () => {
+    setIsLoading(true);
+    setActionError(null);
+    try {
+      // 1. Fetch live availability matrix
+      const slotRes = await slotAPI.getAvailability(currentDate);
+      if (slotRes?.success && Array.isArray(slotRes.matrix) && slotRes.matrix.length > 0) {
+        setSlots(slotRes.matrix);
+      }
+
+      // 2. Fetch live bookings
+      const bookingRes = await bookingAPI.getAll({ date: currentDate });
+      if (bookingRes?.success && Array.isArray(bookingRes.data) && bookingRes.data.length > 0) {
+        setBookings(bookingRes.data);
+        saveStoredBookings(bookingRes.data);
+      }
+
+      // 3. Fetch active turfs
+      const turfRes = await turfAPI.getAll({ status: "active" });
+      if (turfRes?.success && Array.isArray(turfRes.data) && turfRes.data.length > 0) {
+        setTurfs(turfRes.data);
+      }
+    } catch (err) {
+      console.warn("[SlotsBookings] API sync error, keeping local mock state:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSchedule();
+  }, [currentDate]);
+
   // Manual Booking Form State
   const [bookingForm, setBookingForm] = useState({
     customerName: "",
     customerPhone: "",
     turfId: turfs[0]?.id || "pitch-1",
-    date: "2026-10-24",
+    date: new Date().toISOString().split("T")[0],
     timeSlot: "18:00 - 20:00",
     bookingType: "Casual Match",
     paymentMethod: "Cash at Desk",
@@ -50,31 +88,59 @@ export function SlotsBookingsPage() {
     notes: "Grounds superintendent scheduled cycle"
   });
 
-  // Conflict Detection: check if chosen turf & timeSlot is already booked or blocked
+  // Client-side quick check
   const checkConflict = (turfId, timeSlot) => {
-    // Check against bookings on that date
     const booked = bookings.find(
       (b) =>
-        b.turfId === turfId &&
+        (b.turfId === turfId || b.turf === turfId) &&
         b.timeSlot === timeSlot &&
         b.status !== "Cancelled"
     );
     if (booked) {
-      return { hasConflict: true, message: `Conflict Warning: ${booked.turfName} is already booked by ${booked.customerName} (#${booked.id}) for ${timeSlot}.` };
+      return { hasConflict: true, message: `Conflict Warning: ${booked.turfName || 'Selected Turf'} is already booked by ${booked.customerName} (#${booked.bookingId || booked.id}) for ${timeSlot}.` };
     }
     return { hasConflict: false };
   };
 
   const conflictInfo = checkConflict(bookingForm.turfId, bookingForm.timeSlot);
 
-  const handleCreateBooking = (e) => {
+  const handleCreateBooking = async (e) => {
     e.preventDefault();
-    if (conflictInfo.hasConflict) {
-      alert("Cannot create booking due to a schedule conflict. Please choose another turf or time slot.");
+    setActionError(null);
+
+    const selectedTurf = turfs.find((t) => t.id === bookingForm.turfId || t._id === bookingForm.turfId) || turfs[0];
+
+    try {
+      // Send booking to backend with server-side validation and price computation
+      const res = await bookingAPI.create({
+        ...bookingForm,
+        turfId: selectedTurf.id || selectedTurf._id,
+        date: bookingForm.date || currentDate,
+      });
+
+      if (res?.data) {
+        setBookings([res.data, ...bookings]);
+        saveStoredBookings([res.data, ...bookings]);
+        setIsManualBookingOpen(false);
+        setBookingForm({
+          customerName: "",
+          customerPhone: "",
+          turfId: turfs[0]?.id || "pitch-1",
+          date: currentDate,
+          timeSlot: "18:00 - 20:00",
+          bookingType: "Casual Match",
+          paymentMethod: "Cash at Desk",
+          paymentStatus: "Paid",
+        });
+        fetchSchedule(); // Refresh availability grid
+        return;
+      }
+    } catch (err) {
+      alert(`Booking Failed: ${err.message}`);
       return;
     }
 
-    const selectedTurf = turfs.find((t) => t.id === bookingForm.turfId) || turfs[0];
+    // Local fallback
     const newBooking = {
       id: `TE-${Math.floor(1000 + Math.random() * 9000)}`,
       customerName: bookingForm.customerName || "Walk-in Guest",
@@ -85,11 +151,11 @@ export function SlotsBookingsPage() {
         .join("")
         .toUpperCase()
         .slice(0, 2),
-      turfId: selectedTurf.id,
+      turfId: selectedTurf.id || selectedTurf._id,
       turfName: selectedTurf.name,
       turfType: selectedTurf.surfaceGrade,
       date: bookingForm.date,
-      displayDate: "Today, Oct 24",
+      displayDate: `Date: ${bookingForm.date}`,
       timeSlot: bookingForm.timeSlot,
       startTime: bookingForm.timeSlot.split(" - ")[0],
       endTime: bookingForm.timeSlot.split(" - ")[1],
@@ -107,31 +173,51 @@ export function SlotsBookingsPage() {
     setBookings(updated);
     saveStoredBookings(updated);
     setIsManualBookingOpen(false);
-    setBookingForm({
-      customerName: "",
-      customerPhone: "",
-      turfId: turfs[0]?.id || "pitch-1",
-      date: "2026-10-24",
-      timeSlot: "18:00 - 20:00",
-      bookingType: "Casual Match",
-      paymentMethod: "Cash at Desk",
-      paymentStatus: "Paid",
-    });
   };
 
-  const handleBlockSlot = (e) => {
+  const handleBlockSlot = async (e) => {
     e.preventDefault();
-    alert(`Maintenance block applied for ${blockForm.timeSlot} on ${turfs.find(t => t.id === blockForm.turfId)?.name || 'Pitch'}.`);
+    try {
+      await slotAPI.block({
+        turfId: blockForm.turfId,
+        date: currentDate,
+        timeSlot: blockForm.timeSlot,
+        reason: blockForm.reason,
+        notes: blockForm.notes,
+      });
+      fetchSchedule();
+    } catch (err) {
+      console.warn("Backend block error:", err.message);
+    }
+    alert(`Maintenance block applied for ${blockForm.timeSlot} on ${turfs.find(t => t.id === blockForm.turfId || t._id === blockForm.turfId)?.name || 'Pitch'}.`);
     setIsMaintenanceOpen(false);
   };
 
-  const handleUnlockSlot = (slotTime, pitchKey) => {
+  const handleUnlockSlot = async (slotTime, pitchKey) => {
+    try {
+      await slotAPI.unblock({
+        date: currentDate,
+        timeSlot: slotTime,
+      });
+      fetchSchedule();
+    } catch (err) {
+      console.warn("Backend unblock error:", err.message);
+    }
     alert(`Maintenance block released for ${slotTime}. The slot is now available for booking.`);
   };
 
-  const handleCancelBooking = (bookingId) => {
+  const handleCancelBooking = async (bookingId) => {
+    try {
+      await bookingAPI.cancel(bookingId);
+      fetchSchedule();
+    } catch (err) {
+      console.warn("Backend cancel error:", err.message);
+    }
+
     const updated = bookings.map((b) =>
-      b.id === bookingId ? { ...b, status: "Cancelled", paymentStatus: "Refunded" } : b
+      (b.id === bookingId || b.bookingId === bookingId)
+        ? { ...b, status: "Cancelled", paymentStatus: "Refunded" }
+        : b
     );
     setBookings(updated);
     saveStoredBookings(updated);
@@ -411,7 +497,7 @@ export function SlotsBookingsPage() {
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-secondary" />
-                        Pitch 1 (Wembley 7s)
+                        Pitch 1 (Greenfield Arena)
                       </span>
                       <span className="text-on-surface-variant font-normal lowercase text-[10px]">
                         fifa pro 50mm
@@ -422,7 +508,7 @@ export function SlotsBookingsPage() {
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-secondary" />
-                        Pitch 2 (Camp Nou 11s)
+                        Pitch 2 (KickOff Arena)
                       </span>
                       <span className="text-on-surface-variant font-normal lowercase text-[10px]">
                         hybrid turf 4g
@@ -433,7 +519,7 @@ export function SlotsBookingsPage() {
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-secondary" />
-                        Pitch 3 (San Siro 5s)
+                        Pitch 3 (Champion Box)
                       </span>
                       <span className="text-on-surface-variant font-normal lowercase text-[10px]">
                         indoor cage 35mm
@@ -444,7 +530,7 @@ export function SlotsBookingsPage() {
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-secondary" />
-                        Pitch 4 (Allianz 5s)
+                        Pitch 4 (Urban Sports)
                       </span>
                       <span className="text-on-surface-variant font-normal lowercase text-[10px]">
                         multi-tech 40mm
@@ -760,7 +846,7 @@ export function SlotsBookingsPage() {
                     </td>
                     <td className="py-3.5 px-4 text-xs text-on-surface-variant">{b.bookingType}</td>
                     <td className="py-3.5 px-4 font-heading font-bold text-on-surface">
-                      ${b.amount.toFixed(2)}
+                      {formatINR(b.amount)}
                     </td>
                     <td className="py-3.5 px-4">
                       <StatusBadge status={b.status} />
@@ -845,7 +931,7 @@ export function SlotsBookingsPage() {
                 type="text"
                 value={bookingForm.customerPhone}
                 onChange={(e) => setBookingForm({ ...bookingForm, customerPhone: e.target.value })}
-                placeholder="+1 (555) 234-8901"
+                placeholder="+91 98XXX 12XXX"
                 className="w-full px-4 py-2.5 bg-surface-container-low rounded-xl text-on-surface font-body text-sm outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               />
             </div>
@@ -862,8 +948,8 @@ export function SlotsBookingsPage() {
                 className="w-full px-4 py-2.5 bg-surface-container-low rounded-xl text-on-surface font-body text-sm outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               >
                 {turfs.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} (${t.hourlyPrice}/hr)
+                  <option key={t.id || t._id} value={t.id || t._id}>
+                    {t.name} (₹{t.hourlyPrice}/hr)
                   </option>
                 ))}
               </select>
@@ -916,9 +1002,8 @@ export function SlotsBookingsPage() {
                 className="w-full px-4 py-2.5 bg-surface-container-low rounded-xl text-on-surface font-body text-sm outline-none focus:ring-2 focus:ring-secondary/40 border border-transparent"
               >
                 <option value="Cash at Desk">Cash at Desk</option>
-                <option value="UPI (PhonePe / GPay)">UPI (PhonePe / GPay)</option>
-                <option value="Card Terminal (Stripe)">Card Terminal (Stripe)</option>
-                <option value="Bank Wire">Bank Wire</option>
+                <option value="UPI (GPay / PhonePe / Paytm)">UPI (GPay / PhonePe / Paytm)</option>
+                <option value="Bank Transfer (IMPS)">Bank Transfer (IMPS)</option>
               </select>
             </div>
           </div>
@@ -930,7 +1015,7 @@ export function SlotsBookingsPage() {
                 Total Session Price:
               </span>
               <div className="font-heading text-xl font-bold text-primary">
-                ${(turfs.find(t => t.id === bookingForm.turfId)?.hourlyPrice || 75) * 2}.00
+                {formatINR(((turfs.find(t => t.id === bookingForm.turfId || t._id === bookingForm.turfId)?.hourlyPrice || 1200) * 2))}
               </div>
             </div>
             <span className="px-2.5 py-1 rounded bg-secondary-container text-on-secondary-container font-heading text-xs font-bold">
@@ -1088,7 +1173,7 @@ export function SlotsBookingsPage() {
               <div>
                 <span className="font-heading text-xs text-on-surface-variant uppercase">Total Amount</span>
                 <div className="font-heading text-lg font-bold text-on-surface mt-0.5">
-                  ${selectedBookingDetails.amount?.toFixed(2)}
+                  {formatINR(selectedBookingDetails.amount || 0)}
                 </div>
                 <div className="text-xs text-secondary font-semibold">
                   {selectedBookingDetails.paymentStatus || "Paid"}

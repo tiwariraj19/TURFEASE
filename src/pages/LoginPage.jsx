@@ -6,7 +6,7 @@ export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState("manager@wembleyturf.com");
+  const [email, setEmail] = useState("owner@turfease.in");
   const [password, setPassword] = useState("owner1234");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -14,7 +14,7 @@ export function LoginPage() {
   const [buttonText, setButtonText] = useState("Sign In to Command Center");
   const [alert, setAlert] = useState(null);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setAlert(null);
 
@@ -30,14 +30,22 @@ export function LoginPage() {
     setIsLoading(true);
     setButtonText("Authenticating Turf...");
 
-    setTimeout(() => {
+    try {
+      await login(email, password);
       setButtonText("Access Granted!");
       setTimeout(() => {
         setButtonText("Launching Dashboard...");
-        login(email, password);
         navigate("/dashboard");
-      }, 600);
-    }, 900);
+      }, 400);
+    } catch (err) {
+      setIsLoading(false);
+      setButtonText("Sign In to Command Center");
+      setAlert({
+        type: "error",
+        title: "Authentication Failed",
+        message: err.message || "Invalid credentials or backend unavailable."
+      });
+    }
   };
 
   const handleForgotPassword = () => {
@@ -48,15 +56,26 @@ export function LoginPage() {
     });
   };
 
-  const handleQuickDemoLogin = () => {
-    setEmail("manager@wembleyturf.com");
+  const handleQuickDemoLogin = async () => {
+    setEmail("owner@turfease.in");
     setPassword("owner1234");
     setIsLoading(true);
-    setButtonText("Access Granted!");
-    setTimeout(() => {
-      login("manager@wembleyturf.com", "owner1234");
-      navigate("/dashboard");
-    }, 500);
+    setButtonText("Authenticating Turf...");
+    try {
+      await login("owner@turfease.in", "owner1234");
+      setButtonText("Access Granted!");
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 400);
+    } catch (err) {
+      setIsLoading(false);
+      setButtonText("Sign In to Command Center");
+      setAlert({
+        type: "error",
+        title: "Authentication Failed",
+        message: err.message || "Could not log in with default credentials."
+      });
+    }
   };
 
   return (
@@ -182,7 +201,7 @@ export function LoginPage() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="owner@turfclub.com"
+                      placeholder="owner@turfease.in"
                       className="w-full bg-surface-container-low text-on-surface font-body text-sm rounded-xl pl-11 pr-10 py-3 focus:outline-none focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary shadow-inner border border-transparent focus:border-primary/20"
                     />
                     <span className="absolute right-3.5 material-symbols-outlined text-[18px] text-secondary pointer-events-none">
@@ -308,7 +327,7 @@ export function LoginPage() {
                   <span className="material-symbols-outlined text-sm">
                     bolt
                   </span>
-                  <span>1-Click Owner Demo Login</span>
+                  <span>1-Click Owner Demo Login (Vansh Tiwari)</span>
                 </button>
                 <div className="flex items-center gap-1.5 text-center text-on-surface-variant">
                   <span className="material-symbols-outlined text-[14px] text-secondary">

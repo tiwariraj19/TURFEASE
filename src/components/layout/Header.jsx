@@ -1,14 +1,15 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { formatDateReadableIN } from "../../utils/formatters";
 
 export function Header({ onMenuClick, onSearchChange, searchTerm = "" }) {
   const { user } = useAuth();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const notifications = [
-    { id: 1, text: "Pitch 1 (Wembley) night lighting scheduled for 18:00", time: "10m ago", icon: "light_mode" },
-    { id: 2, text: "Advance payment received for Booking #TE-8841 ($140.00)", time: "25m ago", icon: "payments" },
-    { id: 3, text: "Automated Sprinkler Cycle completed on Pitch 2", time: "1h ago", icon: "water_drop" },
+    { id: 1, text: "Greenfield Arena (Pitch 1) floodlights scheduled for 18:00", time: "10m ago", icon: "light_mode" },
+    { id: 2, text: "Advance UPI payment received for Booking #TE-8841 (₹1,400)", time: "25m ago", icon: "payments" },
+    { id: 3, text: "Automated Sprinkler Cycle completed on KickOff Arena", time: "1h ago", icon: "water_drop" },
   ];
 
   return (
@@ -48,7 +49,7 @@ export function Header({ onMenuClick, onSearchChange, searchTerm = "" }) {
           <span className="material-symbols-outlined text-base text-secondary">
             event
           </span>
-          <span>Wednesday, Oct 24, 2024</span>
+          <span>{formatDateReadableIN(new Date())}</span>
         </div>
 
         {/* Pitch Health / Weather Badge */}
@@ -57,7 +58,7 @@ export function Header({ onMenuClick, onSearchChange, searchTerm = "" }) {
             wb_sunny
           </span>
           <span className="font-heading text-[11px] font-semibold text-secondary">
-            68°F • Optimal Pitch
+            28°C • Optimal Pitch (Pune)
           </span>
         </div>
 
@@ -114,14 +115,14 @@ export function Header({ onMenuClick, onSearchChange, searchTerm = "" }) {
         <div className="flex items-center gap-space-sm pl-2 border-l border-surface-container">
           <div className="hidden sm:flex flex-col text-right">
             <span className="font-heading text-xs md:text-sm text-on-surface font-semibold leading-tight">
-              {user?.name || "Marcus Vance"}
+              {user?.name || "Vansh Tiwari"}
             </span>
             <span className="font-heading text-[10px] text-on-surface-variant">
               {user?.role || "Head Turf Operator / Owner"}
             </span>
           </div>
           <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary font-heading font-bold text-xs shadow-sm">
-            {user?.avatar || "MV"}
+            {user?.avatar || "VT"}
           </div>
         </div>
       </div>

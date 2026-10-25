@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { StatCard } from "../components/common/StatCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Modal } from "../components/common/Modal";
 import { ConfirmDialog } from "../components/common/ConfirmDialog";
 import { getStoredTurfs, saveStoredTurfs } from "../data/mockData";
+import { turfAPI } from "../services/api";
 
 export function ManageTurfsPage() {
   const navigate = useNavigate();
@@ -12,6 +13,9 @@ export function ManageTurfsPage() {
   const globalSearch = context.globalSearch || "";
 
   const [turfs, setTurfs] = useState(getStoredTurfs());
+  const [isLoading, setIsLoading] = useState(false);
+  const [apiError, setApiError] = useState(null);
+  const [toastMessage, setToastMessage] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSport, setSelectedSport] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -24,6 +28,38 @@ export function ManageTurfsPage() {
   const [currentTurf, setCurrentTurf] = useState(null);
   const [deactivateTarget, setDeactivateTarget] = useState(null);
 
+  // Load Turfs from Backend API
+  const fetchTurfs = async () => {
+    setIsLoading(true);
+    setApiError(null);
+    try {
+      const res = await turfAPI.getAll({
+        search: searchQuery || globalSearch,
+        sportCategory: selectedSport,
+        status: statusFilter,
+        sort: sortBy,
+      });
+      if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+        setTurfs(res.data);
+        saveStoredTurfs(res.data);
+      }
+    } catch (err) {
+      // Graceful fallback to stored/mock turfs if backend is empty or unreachable
+      console.warn("[ManageTurfs] Backend not reachable, using local data cache:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTurfs();
+  }, [selectedSport, statusFilter, sortBy]);
+
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
   // Form State
   const initialForm = {
     name: "",
@@ -31,7 +67,7 @@ export function ManageTurfsPage() {
     location: "",
     sport: "11-a-side",
     sportCategory: "football",
-    hourlyPrice: 80,
+    hourlyPrice: 1000,
     capacity: 16,
     openTime: "06:00",
     closeTime: "23:00",
@@ -86,50 +122,82 @@ export function ManageTurfsPage() {
     setIsEditModalOpen(true);
   };
 
-  const handleSaveTurf = (e) => {
+  const handleSaveTurf = async (e) => {
     e.preventDefault();
     if (!formData.name) {
       alert("Please provide a turf name");
       return;
     }
 
-    if (isEditModalOpen && currentTurf) {
-      const updated = turfs.map((t) =>
-        t.id === currentTurf.id
-          ? {
-              ...t,
-              ...formData,
-              hourlyPrice: Number(formData.hourlyPrice),
-              capacity: Number(formData.capacity),
-            }
-          : t
-      );
-      setTurfs(updated);
-      saveStoredTurfs(updated);
-      setIsEditModalOpen(false);
-    } else {
-      const newTurf = {
-        ...formData,
-        id: `pitch-${Date.now()}`,
-        zone: formData.zone || `Zone ${String.fromCharCode(65 + turfs.length)} • Pitch 0${turfs.length + 1}`,
-        hourlyPrice: Number(formData.hourlyPrice),
-        capacity: Number(formData.capacity),
-        hours: `${formData.openTime}–${formData.closeTime}`,
-        healthStatus: "Optimal",
-        moisture: "42.0%",
-        lightingStatus: "Ready",
-      };
-      const updated = [...turfs, newTurf];
-      setTurfs(updated);
-      saveStoredTurfs(updated);
-      setIsAddModalOpen(false);
+    try {
+      if (isEditModalOpen && currentTurf) {
+        // Try calling backend API
+        try {
+          const res = await turfAPI.update(currentTurf.id || currentTurf._id, formData);
+          if (res?.data) {
+            showToast(`Turf "${res.data.name}" updated successfully.`);
+          }
+        } catch (err) {
+          console.warn("Backend update error, saving to local state:", err.message);
+        }
+
+        const updated = turfs.map((t) =>
+          (t.id === currentTurf.id || t._id === currentTurf._id)
+            ? {
+                ...t,
+                ...formData,
+                hourlyPrice: Number(formData.hourlyPrice),
+                capacity: Number(formData.capacity),
+              }
+            : t
+        );
+        setTurfs(updated);
+        saveStoredTurfs(updated);
+        setIsEditModalOpen(false);
+      } else {
+        // Create new turf
+        let createdTurf = null;
+        try {
+          const res = await turfAPI.create(formData);
+          if (res?.data) {
+            createdTurf = res.data;
+            showToast(`Turf pitch "${res.data.name}" added to inventory.`);
+          }
+        } catch (err) {
+          console.warn("Backend create error, creating locally:", err.message);
+        }
+
+        const newTurf = createdTurf || {
+          ...formData,
+          id: `pitch-${Date.now()}`,
+          zone: formData.zone || `Zone ${String.fromCharCode(65 + turfs.length)} • Pitch 0${turfs.length + 1}`,
+          hourlyPrice: Number(formData.hourlyPrice),
+          capacity: Number(formData.capacity),
+          hours: `${formData.openTime}–${formData.closeTime}`,
+          healthStatus: "Optimal",
+          moisture: "42.0%",
+          lightingStatus: "Ready",
+        };
+        const updated = [...turfs, newTurf];
+        setTurfs(updated);
+        saveStoredTurfs(updated);
+        setIsAddModalOpen(false);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to save turf.");
     }
   };
 
-  const handleToggleStatus = (turf) => {
+  const handleToggleStatus = async (turf) => {
     const nextStatus = turf.status === "active" ? "inactive" : "active";
+    try {
+      await turfAPI.toggleStatus(turf.id || turf._id);
+      showToast(`Turf "${turf.name}" marked as ${nextStatus}.`);
+    } catch (err) {
+      console.warn("Backend toggle error, toggling locally:", err.message);
+    }
     const updated = turfs.map((t) =>
-      t.id === turf.id ? { ...t, status: nextStatus } : t
+      (t.id === turf.id || t._id === turf._id) ? { ...t, status: nextStatus } : t
     );
     setTurfs(updated);
     saveStoredTurfs(updated);
@@ -242,8 +310,8 @@ export function ManageTurfsPage() {
         />
         <StatCard
           title="Avg. Hourly Yield"
-          value="$68/hr"
-          subtitle="Dynamic tier active ($55 - $110/hr)"
+          value="₹950/hr"
+          subtitle="Dynamic tier active (₹700 - ₹1,400/hr)"
           icon="payments"
           badgeText="Blended"
           badgeVariant="neutral"
@@ -397,7 +465,7 @@ export function ManageTurfsPage() {
                     </div>
                     <div className="text-right">
                       <span className="font-heading text-2xl font-bold text-tertiary-fixed leading-none">
-                        ${turf.hourlyPrice}
+                        ₹{turf.hourlyPrice}
                       </span>
                       <span className="font-heading text-[10px] text-on-primary-container block">
                         per hour
@@ -552,7 +620,7 @@ export function ManageTurfsPage() {
                     </td>
                     <td className="py-3.5 px-4 font-medium">{turf.sport}</td>
                     <td className="py-3.5 px-4 font-heading font-bold text-primary">
-                      ${turf.hourlyPrice}/hr
+                      ₹{turf.hourlyPrice}/hr
                     </td>
                     <td className="py-3.5 px-4 font-medium">{turf.capacity} Players</td>
                     <td className="py-3.5 px-4 text-xs text-on-surface-variant">{turf.hours}</td>
@@ -699,14 +767,14 @@ export function ManageTurfsPage() {
             {/* Hourly Price */}
             <div>
               <label className="block font-heading text-xs uppercase font-semibold text-on-surface mb-1">
-                Standard Hourly Price ($ USD)
+                Standard Hourly Price (₹ INR)
               </label>
               <div className="relative flex items-center">
-                <span className="absolute left-3 text-secondary font-bold text-sm">$</span>
+                <span className="absolute left-3 text-secondary font-bold text-sm">₹</span>
                 <input
                   type="number"
-                  min="10"
-                  step="5"
+                  min="100"
+                  step="50"
                   required
                   value={formData.hourlyPrice}
                   onChange={(e) => setFormData({ ...formData, hourlyPrice: e.target.value })}

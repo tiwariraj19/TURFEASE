@@ -1,22 +1,52 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { StatCard } from "../components/common/StatCard";
 import { getStoredTurfs } from "../data/mockData";
+import { reportAPI, turfAPI } from "../services/api";
+import { formatINR } from "../utils/formatters";
 
 export function ReportsPage() {
-  const [turfs] = useState(getStoredTurfs());
+  const [turfs, setTurfs] = useState(getStoredTurfs());
   const [dateRange, setDateRange] = useState("This Month (Oct 1 - Oct 31, 2024)");
   const [selectedTurf, setSelectedTurf] = useState("all");
   const [metricTab, setMetricTab] = useState("revenue"); // 'revenue' | 'bookings' | 'occupancy'
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const fetchAnalytics = async () => {
+    setIsLoading(true);
+    try {
+      const res = await reportAPI.getAnalytics({
+        dateRange,
+        turfId: selectedTurf,
+      });
+      if (res?.success && res.data) {
+        setAnalyticsData(res.data);
+      }
+
+      const turfRes = await turfAPI.getAll();
+      if (turfRes?.success && turfRes.data?.length > 0) {
+        setTurfs(turfRes.data);
+      }
+    } catch (err) {
+      console.warn("[Reports] Analytics sync error, keeping local mock state:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAnalytics();
+  }, [dateRange, selectedTurf]);
 
   const handleExportCSV = () => {
     const headers = ["Facility / Pitch", "Gross Revenue", "Revenue Share", "Capacity Occupancy", "Status"];
     const rows = [
-      ["Wembley Grand Arena (11s)", "$12,450.00", "32.4%", "92%", "Optimal"],
-      ["Bernabéu Championship (11s)", "$9,870.00", "25.7%", "88%", "Optimal"],
-      ["Camp Nou Grand Court (7s)", "$6,240.00", "16.2%", "84%", "Optimal"],
-      ["San Siro Indoor Cage (5s)", "$4,320.00", "11.2%", "86%", "Optimal"],
-      ["Allianz Perimeter Arena (5/7s)", "$3,180.00", "8.3%", "79%", "Optimal"],
-      ["Lord's Cricket Box (Cricket)", "$2,360.00", "6.1%", "74%", "Optimal"]
+      ["Greenfield Sports Arena (Pune)", "₹1,24,500", "32.4%", "92%", "Optimal"],
+      ["KickOff Football Arena (Mumbai)", "₹98,700", "25.7%", "88%", "Optimal"],
+      ["Champion Cricket Ground (Thane)", "₹62,400", "16.2%", "84%", "Optimal"],
+      ["Urban Sports Turf (Pune)", "₹43,200", "11.2%", "86%", "Optimal"],
+      ["Elite Play Arena (Mumbai)", "₹31,800", "8.3%", "79%", "Optimal"],
+      ["Nashik Premier Cricket Box (Nashik)", "₹23,600", "6.1%", "74%", "Optimal"]
     ];
     const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].map(e => e.join(",")).join("\n");
     const encodedUri = encodeURI(csvContent);
@@ -107,34 +137,34 @@ export function ReportsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-md mb-space-xl">
         <StatCard
           title="Total Revenue"
-          value="$38,420.00"
-          subtitle="Blended yield $68.40/hr"
+          value={formatINR(analyticsData?.summary?.totalRevenueCollected ?? 384200)}
+          subtitle="Net revenue collected across grounds"
           icon="payments"
           badgeText="+16.4%"
           badgeVariant="positive"
         />
         <StatCard
           title="Total Bookings"
-          value="412 Slots"
-          subtitle="88.5% capacity utilization"
+          value={`${analyticsData?.summary?.totalBookings ?? 412} Slots`}
+          subtitle="All scheduled reservations"
           icon="calendar_month"
           badgeText="+8.2% vs last mo"
           badgeVariant="positive"
         />
         <StatCard
           title="Completed Bookings"
-          value="386 Slots"
-          subtitle="0 weather disruptions"
+          value={`${analyticsData?.summary?.statusCounts?.Completed ?? 386} Slots`}
+          subtitle="Fulfilled match hours"
           icon="verified"
-          badgeText="93.7% Completion"
+          badgeText="Completed"
           badgeVariant="positive"
         />
         <StatCard
-          title="Cancelled &amp; No-Show"
-          value="26 Slots"
-          subtitle="18 resched • 8 ref ($540)"
+          title="Cancelled & No-Show"
+          value={`${analyticsData?.summary?.statusCounts?.Cancelled ?? 26} Slots`}
+          subtitle="Protected schedule history"
           icon="event_busy"
-          badgeText="6.3% Churn"
+          badgeText="Cancelled"
           badgeVariant="negative"
         />
       </div>
@@ -164,7 +194,7 @@ export function ReportsPage() {
                   }`}
                   type="button"
                 >
-                  Revenue ($)
+                  Revenue (₹)
                 </button>
                 <button
                   onClick={() => setMetricTab("bookings")}
@@ -197,7 +227,7 @@ export function ReportsPage() {
               <div className="absolute top-6 left-[62%] -translate-x-1/2 z-10 bg-primary text-on-primary px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-space-xs font-heading text-xs border border-tertiary-fixed/30">
                 <div className="w-2 h-2 rounded-full bg-tertiary-fixed animate-ping" />
                 <span className="font-bold text-tertiary-fixed">Peak Sat Oct 18:</span>
-                <span>$2,420.00 • 28 Slots</span>
+                <span>₹24,200.00 • 28 Slots</span>
               </div>
 
               {/* SVG Chart Visual */}
@@ -252,10 +282,10 @@ export function ReportsPage() {
 
               {/* Chart X-Axis Labels */}
               <div className="flex items-center justify-between text-outline font-heading text-xs px-2 pt-2">
-                <span>Week 1: $8.2k</span>
-                <span>Week 2: $9.6k</span>
-                <span className="text-primary font-bold">Week 3: $11.1k 🔥</span>
-                <span>Week 4: $9.5k</span>
+                <span>Week 1: ₹82k</span>
+                <span>Week 2: ₹96k</span>
+                <span className="text-primary font-bold">Week 3: ₹1.11L 🔥</span>
+                <span>Week 4: ₹95k</span>
               </div>
             </div>
 
@@ -265,14 +295,14 @@ export function ReportsPage() {
                 <span className="material-symbols-outlined text-secondary text-lg">calendar_view_week</span>
                 <div className="flex flex-col">
                   <span className="font-heading text-[11px] text-outline">Peak Revenue Day</span>
-                  <span className="font-heading text-sm text-primary font-bold">Saturday ($2,420 avg)</span>
+                  <span className="font-heading text-sm text-primary font-bold">Saturday (₹24,200 avg)</span>
                 </div>
               </div>
               <div className="flex items-center gap-space-xs">
                 <span className="material-symbols-outlined text-secondary text-lg">stars</span>
                 <div className="flex flex-col">
                   <span className="font-heading text-[11px] text-outline">Highest Yield Turf</span>
-                  <span className="font-heading text-sm text-primary font-bold">Wembley Grand ($110/hr)</span>
+                  <span className="font-heading text-sm text-primary font-bold">Greenfield Arena (₹1,400/hr)</span>
                 </div>
               </div>
               <div className="flex items-center gap-space-xs">
@@ -366,14 +396,23 @@ export function ReportsPage() {
             </div>
 
             <div className="flex flex-col gap-space-md">
-              {[
-                { name: "Wembley Grand Arena (11s)", amount: "$12,450.00", share: "32.4%", occ: "92%", color: "bg-primary" },
-                { name: "Bernabéu Championship (11s)", amount: "$9,870.00", share: "25.7%", occ: "88%", color: "bg-secondary" },
-                { name: "Camp Nou Grand Court (7s)", amount: "$6,240.00", share: "16.2%", occ: "84%", color: "bg-surface-tint" },
-                { name: "San Siro Indoor Cage (5s)", amount: "$4,320.00", share: "11.2%", occ: "86%", color: "bg-tertiary-fixed-dim" },
-                { name: "Allianz Perimeter (5/7s)", amount: "$3,180.00", share: "8.3%", occ: "79%", color: "bg-outline" },
-                { name: "Lord's Cricket Box", amount: "$2,360.00", share: "6.1%", occ: "74%", color: "bg-secondary-fixed-dim" }
-              ].map((item, idx) => (
+              {(analyticsData?.turfBreakdown?.length > 0
+                ? analyticsData.turfBreakdown.map((t, idx) => ({
+                    name: t.name,
+                    amount: formatINR(t.grossRevenue || 0),
+                    share: t.revenueShare || "0%",
+                    occ: t.occupancy || "85%",
+                    color: ["bg-primary", "bg-secondary", "bg-surface-tint", "bg-tertiary-fixed-dim", "bg-outline", "bg-secondary-fixed-dim"][idx % 6],
+                  }))
+                : [
+                    { name: "Greenfield Sports Arena (Pune)", amount: "₹1,24,500", share: "32.4%", occ: "92%", color: "bg-primary" },
+                    { name: "KickOff Football Arena (Mumbai)", amount: "₹98,700", share: "25.7%", occ: "88%", color: "bg-secondary" },
+                    { name: "Champion Cricket Ground (Thane)", amount: "₹62,400", share: "16.2%", occ: "84%", color: "bg-surface-tint" },
+                    { name: "Urban Sports Turf (Pune)", amount: "₹43,200", share: "11.2%", occ: "86%", color: "bg-tertiary-fixed-dim" },
+                    { name: "Elite Play Arena (Mumbai)", amount: "₹31,800", share: "8.3%", occ: "79%", color: "bg-outline" },
+                    { name: "Nashik Premier Cricket Box", amount: "₹23,600", share: "6.1%", occ: "74%", color: "bg-secondary-fixed-dim" }
+                  ]
+              ).map((item, idx) => (
                 <div key={idx} className="flex flex-col gap-1">
                   <div className="flex items-center justify-between font-heading text-xs">
                     <span className="font-bold text-on-surface truncate pr-2">{item.name}</span>
@@ -423,7 +462,7 @@ export function ReportsPage() {
                     <span>Paid in Full</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-primary">$34,860.00</span>
+                    <span className="font-bold text-primary">₹3,48,600.00</span>
                     <span className="text-outline text-[11px]">(90.7%)</span>
                   </div>
                 </div>
@@ -434,7 +473,7 @@ export function ReportsPage() {
                     <span>Pending Invoices</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-on-surface">$2,850.00</span>
+                    <span className="font-bold text-on-surface">₹28,500.00</span>
                     <span className="text-outline text-[11px]">(7.4%)</span>
                   </div>
                 </div>
@@ -445,7 +484,7 @@ export function ReportsPage() {
                     <span>Partial Balances</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-on-surface">$710.00</span>
+                    <span className="font-bold text-on-surface">₹7,100.00</span>
                     <span className="text-outline text-[11px]">(1.9%)</span>
                   </div>
                 </div>
@@ -456,7 +495,7 @@ export function ReportsPage() {
                     <span>Refunded / Waivers</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-error">$420.00</span>
+                    <span className="font-bold text-error">₹4,200.00</span>
                     <span className="text-outline text-[11px]">(1.1%)</span>
                   </div>
                 </div>
